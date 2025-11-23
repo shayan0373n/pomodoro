@@ -1,0 +1,5 @@
+{
+  "name": "Continuous Pomodoro",
+  "description": "A modified Pomodoro app where the timer runs uninterrupted. Earn 5-minute rest gifts for every 25-minute pomodoro, and a 15-minute super gift every 4 pomodoros. Bank your rest time and use it whenever you want, without stopping the main timer. Your progress is saved automatically.",
+  "requestFramePermissions": []
+}
