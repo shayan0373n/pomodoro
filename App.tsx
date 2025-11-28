@@ -5,7 +5,8 @@ import TimerDisplay from './components/TimerDisplay';
 import RestTimerDisplay from './components/RestTimerDisplay';
 import PomodoroStats from './components/PomodoroStats';
 import GiftStore from './components/GiftStore';
-import Notification from './components/Notification';
+import NotificationBanner from './components/Notification';
+import SettingsModal from './components/SettingsModal';
 
 // Icons
 import PlayIcon from './components/icons/PlayIcon';
@@ -13,6 +14,7 @@ import PauseIcon from './components/icons/PauseIcon';
 import GiftIcon from './components/icons/GiftIcon';
 import ResetIcon from './components/icons/ResetIcon';
 import ReturnIcon from './components/icons/ReturnIcon';
+import SettingsIcon from './components/icons/SettingsIcon';
 
 // Data
 import { FACTS } from './data/facts';
@@ -20,27 +22,39 @@ import { FACTS } from './data/facts';
 // Hooks
 import { useAudio } from './hooks/useAudio';
 
-const POMODORO_DURATION_SECONDS = 25 * 60;
-
-
-
-// Helper to send browser notifications
+// Helper to send browser notifications (using window.Notification explicitly to avoid conflict)
 const sendBrowserNotification = (title: string, body: string) => {
-    if (!("Notification" in window)) return;
-    if (Notification.permission === "granted") {
+    const BrowserNotification = window.Notification;
+    
+    if (!BrowserNotification) return;
+    
+    if (BrowserNotification.permission === "granted") {
         try {
-            new Notification(title, { body, icon: '/vite.svg' });
+            new BrowserNotification(title, { 
+                body, 
+                icon: '/vite.svg',
+                requireInteraction: true,
+                tag: 'pomodoro-notification'
+            });
         } catch (e) {
-            console.error("Notification failed", e);
+            console.error("Notification creation failed", e);
+        }
+    } else if (BrowserNotification.permission !== "denied" && typeof BrowserNotification.requestPermission === 'function') {
+        try {
+            BrowserNotification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    new BrowserNotification(title, { body, icon: '/vite.svg' });
+                }
+            });
+        } catch (e) {
+            console.error("Failed to request notification permission", e);
         }
     }
 };
 
-
-
 // Helper to calculate consistent initial state
 // Syncs 'pomodorosCompleted' with 'totalSeconds' immediately to prevent ghost gifts on load
-const getInitialState = () => {
+const getInitialState = (pomodoroDurationSeconds: number) => {
     if (typeof window === 'undefined') return {
         pomodoros: 0,
         seconds: 0,
@@ -66,7 +80,7 @@ const getInitialState = () => {
     // Check if totalSeconds implies more pomodoros than we have stored.
     // If so, we initialize state to the higher value.
     // This prevents the useEffect loop from seeing a discrepancy on mount and triggering "catch-up" gifts when the user just refreshes.
-    const derivedPomodoros = Math.floor(totalSeconds / POMODORO_DURATION_SECONDS);
+    const derivedPomodoros = Math.floor(totalSeconds / pomodoroDurationSeconds);
     const initialPomodoros = Math.max(storedPomodoros, derivedPomodoros);
 
     return {
@@ -78,8 +92,23 @@ const getInitialState = () => {
 };
 
 const App: React.FC = () => {
+    // Settings State
+    const [settings, setSettings] = useState(() => {
+        const saved = localStorage.getItem('pomodoroSettings');
+        const parsed = saved ? JSON.parse(saved) : {};
+        return {
+            pomodoroDuration: Number(parsed.pomodoroDuration) || 25,
+            shortRestReward: Number(parsed.shortRestReward) || 5,
+            longRestReward: Number(parsed.longRestReward) || 15
+        };
+    });
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+    // Ensure duration is at least 1 minute to prevent division by zero
+    const POMODORO_DURATION_SECONDS = Math.max(60, settings.pomodoroDuration * 60);
+
     // Use a single state initializer to guarantee consistency across all variables
-    const [initialValues] = useState(getInitialState);
+    const [initialValues] = useState(() => getInitialState(POMODORO_DURATION_SECONDS));
 
     // Hooks
     const { playSound, initAudio } = useAudio();
@@ -111,12 +140,11 @@ const App: React.FC = () => {
         setNotification(null);
     }, []);
 
-    // Request Notification Permission on Mount
-    useEffect(() => {
-        if ("Notification" in window && Notification.permission === "default") {
-            Notification.requestPermission();
-        }
-    }, []);
+    const handleSaveSettings = useCallback((newSettings: typeof settings) => {
+        setSettings(newSettings);
+        localStorage.setItem('pomodoroSettings', JSON.stringify(newSettings));
+        showNotification('Settings saved.', 'info');
+    }, [showNotification]);
 
     // Change fact when starting a rest
     const rotateFact = useCallback(() => {
@@ -168,10 +196,10 @@ const App: React.FC = () => {
                 for (let i = 1; i <= giftableCount; i++) {
                     const currentPomodoroNumber = startCalc + i;
                     if (currentPomodoroNumber > 0 && currentPomodoroNumber % 4 === 0) {
-                        newRestMinutes += 15;
+                        newRestMinutes += settings.longRestReward;
                         superGifts++;
                     } else {
-                        newRestMinutes += 5;
+                        newRestMinutes += settings.shortRestReward;
                         normalGifts++;
                     }
                 }
@@ -204,7 +232,7 @@ const App: React.FC = () => {
             }
         }
         prevPomodorosRef.current = pomodorosCompleted;
-    }, [pomodorosCompleted, showNotification, playSound]);
+    }, [pomodorosCompleted, showNotification, playSound, settings.longRestReward, settings.shortRestReward]);
 
     // --- Timer Logic ---
     // Update pomodoros based on time
@@ -213,7 +241,7 @@ const App: React.FC = () => {
         if (completedNow > pomodorosCompleted) {
             setPomodorosCompleted(completedNow);
         }
-    }, [totalSeconds, pomodorosCompleted]);
+    }, [totalSeconds, pomodorosCompleted, POMODORO_DURATION_SECONDS]);
 
     // Main Tick
     useEffect(() => {
@@ -246,6 +274,18 @@ const App: React.FC = () => {
         
         // Initialize Audio Context on user interaction to unlock autoplay policies
         initAudio();
+
+        // Request Notification Permission on user interaction
+        const BrowserNotification = window.Notification;
+        if (BrowserNotification && 
+            BrowserNotification.permission === "default" && 
+            typeof BrowserNotification.requestPermission === 'function') {
+            try {
+                BrowserNotification.requestPermission();
+            } catch (e) {
+                console.error("Failed to request notification permission", e);
+            }
+        }
     }, [totalSeconds, initAudio]);
 
     const handlePause = useCallback(() => {
@@ -258,7 +298,7 @@ const App: React.FC = () => {
         localStorage.removeItem('pomodoroStartTime');
         
         setIsRunning(false);
-    }, [totalSeconds]);
+    }, [totalSeconds, POMODORO_DURATION_SECONDS]);
     
     const handleResetTimer = useCallback(() => {
         setTotalSeconds(0);
@@ -284,7 +324,7 @@ const App: React.FC = () => {
         }
         
         showNotification('Pomodoros completed have been reset.', 'info');
-    }, [showNotification, totalSeconds, isRunning]);
+    }, [showNotification, totalSeconds, isRunning, POMODORO_DURATION_SECONDS]);
 
     const handleResetRestMinutes = useCallback(() => {
         setAvailableRestMinutes(0);
@@ -365,7 +405,7 @@ const App: React.FC = () => {
         }
 
         showNotification('1 pomodoro added.', 'info');
-    }, [showNotification, isRunning, totalSeconds]);
+    }, [showNotification, isRunning, totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const handleRemovePomodoro = useCallback(() => {
         setPomodorosCompleted(prev => {
@@ -386,7 +426,7 @@ const App: React.FC = () => {
             }
             return prev;
         });
-    }, [showNotification, isRunning, totalSeconds]);
+    }, [showNotification, isRunning, totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const handleAddRestMinutes = useCallback((minutes: number) => {
         if (minutes > 0) {
@@ -416,14 +456,14 @@ const App: React.FC = () => {
     const currentPomodoroProgress = useMemo(() => {
         const secondsIntoCurrentPomodoro = totalSeconds % POMODORO_DURATION_SECONDS;
         return (secondsIntoCurrentPomodoro / POMODORO_DURATION_SECONDS) * 100;
-    }, [totalSeconds]);
+    }, [totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const secondsRemainingInPomodoro = useMemo(() => {
         if (totalSeconds === 0) return POMODORO_DURATION_SECONDS;
         const secondsIntoCurrentPomodoro = totalSeconds % POMODORO_DURATION_SECONDS;
         if (secondsIntoCurrentPomodoro === 0 && totalSeconds > 0) return POMODORO_DURATION_SECONDS;
         return POMODORO_DURATION_SECONDS - secondsIntoCurrentPomodoro;
-    }, [totalSeconds]);
+    }, [totalSeconds, POMODORO_DURATION_SECONDS]);
     
     const cardStyle = useMemo(() => {
         if (isResting) {
@@ -440,19 +480,35 @@ const App: React.FC = () => {
     return (
         <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 selection:bg-rose-500 selection:text-white">
             {notification && (
-                <Notification
+                <NotificationBanner
                     message={notification.message}
                     type={notification.type}
                     onClose={handleCloseNotification}
                 />
             )}
 
+            <SettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                settings={settings}
+                onSave={handleSaveSettings}
+            />
+
             <main className="w-full max-w-2xl mx-auto flex flex-col items-center text-center">
-                <header className="mb-4">
-                    <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-rose-400 via-fuchsia-500 to-indigo-500">
-                        Continuous Pomodoro
-                    </h1>
-                    <p className="text-gray-400 mt-1 text-sm">The timer never stops. Your focus is eternal.</p>
+                <header className="mb-4 relative w-full flex justify-center items-center">
+                    <div className="flex flex-col items-center">
+                        <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-rose-400 via-fuchsia-500 to-indigo-500">
+                            Continuous Pomodoro
+                        </h1>
+                        <p className="text-gray-400 mt-1 text-sm">The timer never stops. Your focus is eternal.</p>
+                    </div>
+                    <button 
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="absolute right-0 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors"
+                        aria-label="Open Settings"
+                    >
+                        <SettingsIcon />
+                    </button>
                 </header>
 
                 {/* Unified Display Card */}
