@@ -14,56 +14,15 @@ import GiftIcon from './components/icons/GiftIcon';
 import ResetIcon from './components/icons/ResetIcon';
 import ReturnIcon from './components/icons/ReturnIcon';
 
+// Data
+import { FACTS } from './data/facts';
+
+// Hooks
+import { useAudio } from './hooks/useAudio';
+
 const POMODORO_DURATION_SECONDS = 25 * 60;
 
-const FACTS = [
-    "Aragorn broke his two toes kicking a helmet in The Two Towers",
-    "Dumbledore is an Old English word for 'bumblebee'",
-    "the Shire was inspired by the rural English countryside near Birmingham",
-    "Harry Potter and J.K. Rowling share the same birthday, July 31st",
-    "Gandalf is a Maia, a spirit older than the world itself",
-    "Tom Felton auditioned for Harry and Ron before getting the role of Draco",
-    "Sean Connery turned down the role of Gandalf because he didn't understand the script",
-    "Voldemort was 71 years old when he was finally defeated",
-    "Christopher Lee (Saruman) was the only cast member to have met J.R.R. Tolkien",
-    "the Dementors in Harry Potter were created to symbolize depression",
-    "Legolas's eyes change color in the movies because Orlando Bloom's contacts irritated him",
-    "Nicolas Flamel was a real historical figure who died in 1418",
-    "it took 14 different cameras to capture the motion of the Snitch",
-    "Gollum was played by Andy Serkis using motion capture technology",
-    "the actor who played Mad-Eye Moody is the father of the actor who played Bill Weasley",
-    "Ian McKellen based Gandalf's accent on Tolkien's own speaking voice",
-    "J.K. Rowling wrote the Hogwarts house names on an airplane vomit bag",
-    "Viggo Mortensen bought the horse he rode in Lord of the Rings after filming ended",
-    "Daniel Radcliffe went through 160 pairs of glasses during the filming of the series",
-    "John Rhys-Davies (Gimli) is actually taller than the actors playing the hobbits",
-    "the Battle of Helm's Deep took four months to film and was shot at night",
-    "Professor Trelawney's prediction about the first to rise dying actually came true for Dumbledore",
-    "the leaves on the Tree of Lorien were individually painted by hand",
-    "Rupert Grint got the role of Ron Weasley by rapping about why he wanted it",
-    "the Dead Marshes were inspired by J.R.R. Tolkien's experiences in WWI",
-    "Emma Watson's hamster died during filming and the set decorators made a tiny coffin for it",
-    "the script for Order of the Phoenix was found in a pub before the book was released",
-    "over 19,000 costumes were made for the Lord of the Rings trilogy",
-    "the driver of the Knight Bus is named Ernie Prang, and prang is British slang for a crash",
-    "Elijah Wood sent in his audition tape dressed as a hobbit in the woods",
-    "the phrase 'I open at the close' appears on the Snitch and refers to death",
-    "Bill Weasley and Mad-Eye Moody are father and son in real life",
-    "the sound of the Nazgul's screech was made by scraping a plastic cup on concrete",
-    "Fred and George Weasley were born on April Fool's Day",
-    "Sauron is never actually seen in physical form in the books, only as a presence",
-    "the potions Harry drinks in the movies were actually soup",
-    "Orlando Bloom landed the role of Legolas two days before graduating drama school",
-    "Hermione's Patronus is an otter, which is J.K. Rowling's favorite animal",
-    "Samwise Gamgee's daughter Elanor was played by Sean Astin's real daughter",
-    "the moving staircases in Hogwarts were actually just one staircase moved by hydraulics",
-    "Merry and Pippin's fireworks dragon was actually a CGI effect, but the actors' reactions were real surprise",
-    "Molly Weasley's boggart changes to the corpse of whoever she is most worried about",
-    "Shelob's design was based on a funnel-web spider",
-    "Arthur Weasley was originally going to die in Order of the Phoenix",
-    "the Grey Havens scene was shot three times because Sean Astin forgot to wear his vest",
-    "Remus Lupin's name hints at his identity: Remus was raised by a wolf, and Lupin means wolf-like"
-];
+
 
 // Helper to send browser notifications
 const sendBrowserNotification = (title: string, body: string) => {
@@ -77,59 +36,7 @@ const sendBrowserNotification = (title: string, body: string) => {
     }
 };
 
-// Helper to play sound
-const playSound = (type: 'success' | 'alert') => {
-    try {
-        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-        if (!AudioContext) return;
-        
-        const ctx = new AudioContext();
-        
-        if (type === 'success') {
-            // Happy Chime (C major arpeggio)
-            const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
-            const now = ctx.currentTime;
-            
-            notes.forEach((freq, i) => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                
-                osc.type = 'sine';
-                osc.frequency.value = freq;
-                
-                gain.gain.setValueAtTime(0.1, now + i * 0.1);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.3);
-                
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                
-                osc.start(now + i * 0.1);
-                osc.stop(now + i * 0.1 + 0.3);
-            });
-        } else {
-            // Alert Beep (Double beep)
-            const now = ctx.currentTime;
-            [0, 0.2].forEach(offset => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                
-                osc.type = 'square'; // harsher sound for alert
-                osc.frequency.value = 880; // A5
-                
-                gain.gain.setValueAtTime(0.1, now + offset);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.1);
-                
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                
-                osc.start(now + offset);
-                osc.stop(now + offset + 0.1);
-            });
-        }
-    } catch (e) {
-        console.error("Audio playback failed", e);
-    }
-};
+
 
 // Helper to calculate consistent initial state
 // Syncs 'pomodorosCompleted' with 'totalSeconds' immediately to prevent ghost gifts on load
@@ -173,6 +80,9 @@ const getInitialState = () => {
 const App: React.FC = () => {
     // Use a single state initializer to guarantee consistency across all variables
     const [initialValues] = useState(getInitialState);
+
+    // Hooks
+    const { playSound, initAudio } = useAudio();
 
     const [pomodorosCompleted, setPomodorosCompleted] = useState<number>(initialValues.pomodoros);
     const [availableRestMinutes, setAvailableRestMinutes] = useState<number>(initialValues.restMinutes);
@@ -294,7 +204,7 @@ const App: React.FC = () => {
             }
         }
         prevPomodorosRef.current = pomodorosCompleted;
-    }, [pomodorosCompleted, showNotification]);
+    }, [pomodorosCompleted, showNotification, playSound]);
 
     // --- Timer Logic ---
     // Update pomodoros based on time
@@ -325,7 +235,7 @@ const App: React.FC = () => {
             sendBrowserNotification("Rest Finished!", "Time to get back to focus.");
             playSound('alert');
         }
-    }, [isResting, restSecondsRemaining]);
+    }, [isResting, restSecondsRemaining, playSound]);
 
     // --- Handlers ---
     const handleStartResume = useCallback(() => {
@@ -335,12 +245,8 @@ const App: React.FC = () => {
         setIsRunning(true);
         
         // Initialize Audio Context on user interaction to unlock autoplay policies
-        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContext) {
-            const ctx = new AudioContext();
-            ctx.resume();
-        }
-    }, [totalSeconds]);
+        initAudio();
+    }, [totalSeconds, initAudio]);
 
     const handlePause = useCallback(() => {
         // Sync before pausing
@@ -411,12 +317,8 @@ const App: React.FC = () => {
         }
         
         // Initialize Audio Context on user interaction
-        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContext) {
-            const ctx = new AudioContext();
-            ctx.resume();
-        }
-    }, [availableRestMinutes, isResting, isRunning, handlePause, showNotification, rotateFact]);
+        initAudio();
+    }, [availableRestMinutes, isResting, isRunning, handlePause, showNotification, rotateFact, initAudio]);
     
     const handlePauseRest = useCallback(() => {
         let adjustmentMinutes = 0;
