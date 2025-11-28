@@ -28,7 +28,7 @@ const Notification: React.FC<NotificationProps> = ({ message, type, onClose }) =
         setVisible(true);
         const timer = setTimeout(() => {
             setVisible(false);
-            setTimeout(onClose, 300); // Wait for fade out transition
+            setTimeout(onClose, 300);
         }, 4700);
 
         return () => clearTimeout(timer);

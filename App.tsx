@@ -21,29 +21,52 @@ import { FACTS } from './data/facts';
 
 // Hooks
 import { useAudio } from './hooks/useAudio';
+import { useWorkerTimer } from './hooks/useWorkerTimer';
 
-// Helper to send browser notifications (using window.Notification explicitly to avoid conflict)
+// Register Service Worker for reliable background notifications
+let swRegistration: ServiceWorkerRegistration | null = null;
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+        swRegistration = reg;
+        console.log('Service Worker registered for notifications');
+    }).catch(err => {
+        console.error('Service Worker registration failed:', err);
+    });
+}
+
+// Helper to send browser notifications via Service Worker (works reliably in background)
 const sendBrowserNotification = (title: string, body: string) => {
     const BrowserNotification = window.Notification;
     
     if (!BrowserNotification) return;
     
     if (BrowserNotification.permission === "granted") {
-        try {
-            new BrowserNotification(title, { 
-                body, 
-                icon: '/vite.svg',
-                requireInteraction: true,
-                tag: 'pomodoro-notification'
+        // Use Service Worker for reliable background notifications
+        if (swRegistration?.active) {
+            swRegistration.active.postMessage({
+                type: 'SHOW_NOTIFICATION',
+                title,
+                body,
+                icon: '/vite.svg'
             });
-        } catch (e) {
-            console.error("Notification creation failed", e);
+        } else {
+            // Fallback to regular notification if SW not ready
+            try {
+                new BrowserNotification(title, { 
+                    body, 
+                    icon: '/vite.svg',
+                    requireInteraction: true,
+                    tag: 'pomodoro-notification'
+                });
+            } catch (e) {
+                console.error("Notification creation failed", e);
+            }
         }
     } else if (BrowserNotification.permission !== "denied" && typeof BrowserNotification.requestPermission === 'function') {
         try {
             BrowserNotification.requestPermission().then(permission => {
                 if (permission === "granted") {
-                    new BrowserNotification(title, { body, icon: '/vite.svg' });
+                    sendBrowserNotification(title, body); // Retry with permission
                 }
             });
         } catch (e) {
@@ -243,19 +266,17 @@ const App: React.FC = () => {
         }
     }, [totalSeconds, pomodorosCompleted, POMODORO_DURATION_SECONDS]);
 
-    // Main Tick
-    useEffect(() => {
-        if (!isRunning) return;
-        const timerInterval = setInterval(() => setTotalSeconds(prev => prev + 1), 1000);
-        return () => clearInterval(timerInterval);
-    }, [isRunning]);
+    // Main Tick - Using Web Worker to avoid browser throttling in background tabs
+    const handleMainTick = useCallback(() => {
+        setTotalSeconds(prev => prev + 1);
+    }, []);
+    useWorkerTimer({ isRunning, onTick: handleMainTick });
 
-    // Rest Tick
-    useEffect(() => {
-        if (!isResting) return;
-        const restInterval = setInterval(() => setRestSecondsRemaining(prev => prev - 1), 1000);
-        return () => clearInterval(restInterval);
-    }, [isResting]);
+    // Rest Tick - Using Web Worker to avoid browser throttling in background tabs
+    const handleRestTick = useCallback(() => {
+        setRestSecondsRemaining(prev => prev - 1);
+    }, []);
+    useWorkerTimer({ isRunning: isResting, onTick: handleRestTick });
 
     // Browser Notification for Rest Finished
     useEffect(() => {
@@ -452,6 +473,17 @@ const App: React.FC = () => {
         }
     }, [showNotification]);
 
+    const handleReboot = useCallback(() => {
+        // Clear all localStorage state
+        localStorage.removeItem('pomodoroAccumulatedSeconds');
+        localStorage.removeItem('pomodoroStartTime');
+        localStorage.removeItem('pomodoroIsRunning');
+        localStorage.removeItem('pomodorosCompleted');
+        localStorage.removeItem('availableRestMinutes');
+        // Reload the page
+        window.location.reload();
+    }, []);
+
     // --- Computed Values ---
     const currentPomodoroProgress = useMemo(() => {
         const secondsIntoCurrentPomodoro = totalSeconds % POMODORO_DURATION_SECONDS;
@@ -502,13 +534,25 @@ const App: React.FC = () => {
                         </h1>
                         <p className="text-gray-400 mt-1 text-sm">The timer never stops. Your focus is eternal.</p>
                     </div>
-                    <button 
-                        onClick={() => setIsSettingsOpen(true)}
-                        className="absolute right-0 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors"
-                        aria-label="Open Settings"
-                    >
-                        <SettingsIcon />
-                    </button>
+                    <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                        <button 
+                            onClick={handleReboot}
+                            className="p-2 text-gray-500 hover:text-rose-400 hover:bg-gray-800 rounded-full transition-colors"
+                            aria-label="Reboot - Clear all data and reload"
+                            title="Reboot"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        </button>
+                        <button 
+                            onClick={() => setIsSettingsOpen(true)}
+                            className="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors"
+                            aria-label="Open Settings"
+                        >
+                            <SettingsIcon />
+                        </button>
+                    </div>
                 </header>
 
                 {/* Unified Display Card */}
