@@ -406,7 +406,13 @@ const App: React.FC = () => {
         
         setIsResting(false);
         setRestSecondsRemaining(0);
-    }, [restSecondsRemaining, showNotification]);
+        
+        // Automatically resume the timer
+        localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
+        localStorage.setItem('pomodoroStartTime', Date.now().toString());
+        localStorage.setItem('pomodoroIsRunning', 'true');
+        setIsRunning(true);
+    }, [restSecondsRemaining, showNotification, totalSeconds]);
 
     // Manual Controls
     const handleAddPomodoro = useCallback(() => {
