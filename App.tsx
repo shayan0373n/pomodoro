@@ -76,40 +76,44 @@ const sendBrowserNotification = (title: string, body: string) => {
 };
 
 // Helper to calculate consistent initial state
-// Syncs 'pomodorosCompleted' with 'totalSeconds' immediately to prevent ghost gifts on load
+// Timer only runs while browser is alive - no timestamp catch-up logic
+// Always starts paused on reload (closing browser = stopping timer)
 const getInitialState = (pomodoroDurationSeconds: number) => {
     if (typeof window === 'undefined') return {
         pomodoros: 0,
         seconds: 0,
-        isRunning: false,
         restMinutes: 0
     };
 
     const savedAccumulated = parseInt(localStorage.getItem('pomodoroAccumulatedSeconds') || '0', 10);
-    const savedStartTime = parseInt(localStorage.getItem('pomodoroStartTime') || '0', 10);
-    const wasRunning = localStorage.getItem('pomodoroIsRunning') === 'true';
     const storedPomodoros = parseInt(localStorage.getItem('pomodorosCompleted') || '0', 10);
-    const storedRest = parseInt(localStorage.getItem('availableRestMinutes') || '0', 10);
+    let storedRest = parseInt(localStorage.getItem('availableRestMinutes') || '0', 10);
+
+    // If there was an active rest session when browser closed, return those minutes to the gift store
+    const savedRestSeconds = parseInt(localStorage.getItem('pomodoroRestSecondsRemaining') || '0', 10);
+    if (savedRestSeconds !== 0) {
+        // Positive means unused rest, negative means borrowed time
+        const returnMinutes = savedRestSeconds > 0 
+            ? Math.ceil(savedRestSeconds / 60) 
+            : Math.floor(savedRestSeconds / 60);
+        storedRest += returnMinutes;
+        // Clear the saved rest state
+        localStorage.removeItem('pomodoroRestSecondsRemaining');
+        localStorage.setItem('availableRestMinutes', storedRest.toString());
+    }
 
     let totalSeconds = savedAccumulated;
-    if (wasRunning && savedStartTime > 0) {
-        const elapsedSinceStart = Math.floor((Date.now() - savedStartTime) / 1000);
-        totalSeconds += elapsedSinceStart;
-    }
 
     // Ensure we don't have negative time
     if (totalSeconds < 0) totalSeconds = 0;
 
-    // Check if totalSeconds implies more pomodoros than we have stored.
-    // If so, we initialize state to the higher value.
-    // This prevents the useEffect loop from seeing a discrepancy on mount and triggering "catch-up" gifts when the user just refreshes.
+    // Sync pomodoros with totalSeconds to prevent ghost gifts
     const derivedPomodoros = Math.floor(totalSeconds / pomodoroDurationSeconds);
     const initialPomodoros = Math.max(storedPomodoros, derivedPomodoros);
 
     return {
         pomodoros: initialPomodoros,
         seconds: totalSeconds,
-        isRunning: wasRunning,
         restMinutes: storedRest
     };
 };
@@ -138,7 +142,7 @@ const App: React.FC = () => {
 
     const [pomodorosCompleted, setPomodorosCompleted] = useState<number>(initialValues.pomodoros);
     const [availableRestMinutes, setAvailableRestMinutes] = useState<number>(initialValues.restMinutes);
-    const [isRunning, setIsRunning] = useState<boolean>(initialValues.isRunning);
+    const [isRunning, setIsRunning] = useState<boolean>(false); // Always start paused
     const [totalSeconds, setTotalSeconds] = useState<number>(initialValues.seconds);
     
     const [isResting, setIsResting] = useState<boolean>(false);
@@ -174,25 +178,42 @@ const App: React.FC = () => {
         setCurrentFact(FACTS[Math.floor(Math.random() * FACTS.length)]);
     }, []);
 
-    // --- Persistence: Sync State on Visibility Change ---
-    const syncStateFromStorage = useCallback(() => {
-        if (localStorage.getItem('pomodoroIsRunning') !== 'true') return;
-        const accumulatedSecondsOnStart = parseInt(localStorage.getItem('pomodoroAccumulatedSeconds') || '0', 10);
-        const startTime = parseInt(localStorage.getItem('pomodoroStartTime') || '0', 10);
-        if (startTime === 0) return;
-        const elapsedSinceStart = Math.floor((Date.now() - startTime) / 1000);
-        setTotalSeconds(accumulatedSecondsOnStart + elapsedSinceStart);
-    }, []);
-
+    // --- Periodic State Saving (every 10 seconds while active) ---
     useEffect(() => {
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible' && isRunning) {
-                syncStateFromStorage();
+        if (!isRunning && !isResting) return;
+
+        const saveInterval = setInterval(() => {
+            if (isRunning) {
+                localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
+            }
+            if (isResting) {
+                localStorage.setItem('pomodoroRestSecondsRemaining', restSecondsRemaining.toString());
+            }
+        }, 10000); // Save every 10 seconds
+
+        return () => clearInterval(saveInterval);
+    }, [isRunning, isResting, totalSeconds, restSecondsRemaining]);
+
+    // --- Force save state when tab/browser is closing ---
+    useEffect(() => {
+        const handlePageHide = () => {
+            // Save current state immediately before page unloads
+            if (isRunning) {
+                localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
+            }
+            if (isResting) {
+                localStorage.setItem('pomodoroRestSecondsRemaining', restSecondsRemaining.toString());
             }
         };
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [isRunning, syncStateFromStorage]);
+
+        // pagehide fires when the page is actually being unloaded (close tab, navigate away)
+        // We don't save on visibilitychange (tab switch/minimize) since timer keeps running
+        window.addEventListener('pagehide', handlePageHide);
+
+        return () => {
+            window.removeEventListener('pagehide', handlePageHide);
+        };
+    }, [isRunning, isResting, totalSeconds, restSecondsRemaining]);
 
     // --- Gift Logic ---
     useEffect(() => {
@@ -289,8 +310,6 @@ const App: React.FC = () => {
     // --- Handlers ---
     const handleStartResume = useCallback(() => {
         localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
-        localStorage.setItem('pomodoroStartTime', Date.now().toString());
-        localStorage.setItem('pomodoroIsRunning', 'true');
         setIsRunning(true);
         
         // Initialize Audio Context on user interaction to unlock autoplay policies
@@ -315,8 +334,6 @@ const App: React.FC = () => {
         setPomodorosCompleted(current => Math.max(current, completedNow));
 
         localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
-        localStorage.setItem('pomodoroIsRunning', 'false');
-        localStorage.removeItem('pomodoroStartTime');
         
         setIsRunning(false);
     }, [totalSeconds, POMODORO_DURATION_SECONDS]);
@@ -324,7 +341,6 @@ const App: React.FC = () => {
     const handleResetTimer = useCallback(() => {
         setTotalSeconds(0);
         localStorage.setItem('pomodoroAccumulatedSeconds', '0');
-        localStorage.removeItem('pomodoroStartTime');
         showNotification('Timer progress has been reset.', 'info');
     }, [showNotification]);
 
@@ -336,16 +352,10 @@ const App: React.FC = () => {
         setPomodorosCompleted(0);
         manualUpdatesPending.current = 0; // Clear any pending manual flags
 
-        // CRITICAL: If running, re-anchor the start time so refresh doesn't revert state
-        if (isRunning) {
-             localStorage.setItem('pomodoroAccumulatedSeconds', newTotalSeconds.toString());
-             localStorage.setItem('pomodoroStartTime', Date.now().toString());
-        } else {
-             localStorage.setItem('pomodoroAccumulatedSeconds', newTotalSeconds.toString());
-        }
+        localStorage.setItem('pomodoroAccumulatedSeconds', newTotalSeconds.toString());
         
         showNotification('Pomodoros completed have been reset.', 'info');
-    }, [showNotification, totalSeconds, isRunning, POMODORO_DURATION_SECONDS]);
+    }, [showNotification, totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const handleResetRestMinutes = useCallback(() => {
         setAvailableRestMinutes(0);
@@ -406,11 +416,10 @@ const App: React.FC = () => {
         
         setIsResting(false);
         setRestSecondsRemaining(0);
+        localStorage.removeItem('pomodoroRestSecondsRemaining');
         
         // Automatically resume the timer
         localStorage.setItem('pomodoroAccumulatedSeconds', totalSeconds.toString());
-        localStorage.setItem('pomodoroStartTime', Date.now().toString());
-        localStorage.setItem('pomodoroIsRunning', 'true');
         setIsRunning(true);
     }, [restSecondsRemaining, showNotification, totalSeconds]);
 
@@ -423,16 +432,10 @@ const App: React.FC = () => {
         const newTotal = totalSeconds + POMODORO_DURATION_SECONDS;
         setTotalSeconds(newTotal);
 
-        // CRITICAL: Re-anchor storage if running so refresh doesn't lose the added time
-        if (isRunning) {
-             localStorage.setItem('pomodoroAccumulatedSeconds', newTotal.toString());
-             localStorage.setItem('pomodoroStartTime', Date.now().toString());
-        } else {
-             localStorage.setItem('pomodoroAccumulatedSeconds', newTotal.toString());
-        }
+        localStorage.setItem('pomodoroAccumulatedSeconds', newTotal.toString());
 
         showNotification('1 pomodoro added.', 'info');
-    }, [showNotification, isRunning, totalSeconds, POMODORO_DURATION_SECONDS]);
+    }, [showNotification, totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const handleRemovePomodoro = useCallback(() => {
         setPomodorosCompleted(prev => {
@@ -442,18 +445,12 @@ const App: React.FC = () => {
                 const newSeconds = Math.max(0, totalSeconds - POMODORO_DURATION_SECONDS);
                 setTotalSeconds(newSeconds);
 
-                // CRITICAL: Re-anchor storage if running
-                if (isRunning) {
-                    localStorage.setItem('pomodoroAccumulatedSeconds', newSeconds.toString());
-                    localStorage.setItem('pomodoroStartTime', Date.now().toString());
-                } else {
-                    localStorage.setItem('pomodoroAccumulatedSeconds', newSeconds.toString());
-                }
+                localStorage.setItem('pomodoroAccumulatedSeconds', newSeconds.toString());
                 return prev - 1;
             }
             return prev;
         });
-    }, [showNotification, isRunning, totalSeconds, POMODORO_DURATION_SECONDS]);
+    }, [showNotification, totalSeconds, POMODORO_DURATION_SECONDS]);
 
     const handleAddRestMinutes = useCallback((minutes: number) => {
         if (minutes > 0) {
@@ -482,10 +479,9 @@ const App: React.FC = () => {
     const handleReboot = useCallback(() => {
         // Clear all localStorage state
         localStorage.removeItem('pomodoroAccumulatedSeconds');
-        localStorage.removeItem('pomodoroStartTime');
-        localStorage.removeItem('pomodoroIsRunning');
         localStorage.removeItem('pomodorosCompleted');
         localStorage.removeItem('availableRestMinutes');
+        localStorage.removeItem('pomodoroRestSecondsRemaining');
         // Reload the page
         window.location.reload();
     }, []);
